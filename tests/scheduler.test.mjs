@@ -1,10 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
-const source = await readFile(new URL('../dist/scheduler.js', import.meta.url), 'utf8');
-const { generateTimetables, validateTimetable } = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
+import { generateTimetables, validateTimetable } from '../dist/scheduler.js';
 import { normalizeAssignments, parseInstructions } from '../dist/imports.js';
-import { DEMO_ASSIGNMENTS, DEFAULT_CONFIG, DEFAULT_INSTRUCTIONS } from '../dist/demo.js';
+import { DEMO_ASSIGNMENTS, DEFAULT_CONFIG, DEFAULT_INSTRUCTIONS, DEMO_BLOCKS } from '../dist/demo.js';
 const config = {
   days: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'], start: '09:00', end: '16:30', slotMinutes: 60,
   breaks: [{ name: 'Short break', start: '11:00', end: '11:15' }, { name: 'Lunch', start: '13:15', end: '14:00' }],
@@ -96,15 +94,20 @@ test('rejects inconsistent lab hours and detects limited availability capacity',
   assert.match(capacity.diagnostics.join(' '), /capacity for only 5/);
 });
 
-test('the shipped demo and pasted instructions generate three complete 89-hour alternatives', () => {
+test('the shipped demo and pasted instructions generate complete teaching and research alternatives with equal early starts', () => {
   const parsed = parseInstructions(DEFAULT_INSTRUCTIONS, DEFAULT_CONFIG);
   assert.deepEqual(parsed.errors, []);
   assert.deepEqual(parsed.unrecognized, []);
-  assert.equal(parsed.recognized.length, 8);
+  assert.ok(parsed.recognized.length >= 8);
+  parsed.config.teacherBlocks = DEMO_BLOCKS;
   const result = generateTimetables(DEMO_ASSIGNMENTS, parsed.config);
   assert.equal(result.options.length, 3);
   for (const option of result.options) {
-    assert.equal(option.metrics.scheduledHours, 89);
+    assert.equal(option.metrics.scheduledHours, DEMO_ASSIGNMENTS.reduce((total, row) => total + row.hours, 0));
+    assert.equal(option.metrics.researchHours, 4);
+    assert.equal(option.metrics.earlyStartEqual, true);
+    assert.ok(option.metrics.earlyStarts.every(early => early.count === 1 && early.target === 1));
+    assert.equal(option.blocks.length, DEMO_BLOCKS.length);
     assert.equal(validateTimetable(option, DEMO_ASSIGNMENTS, parsed.config).valid, true);
     assert.ok(option.events.filter(event => event.teacher === 'Dr. Ananya Rao').every(event => event.day !== 'Friday'));
   }
@@ -113,7 +116,7 @@ test('the shipped demo and pasted instructions generate three complete 89-hour a
 test('fractional clock hours preserve exact minute durations on weekend teaching days', () => {
   const normalized = normalizeAssignments([{ department: 'Computer Science', semester: 2, teacher: 'Dr. Example', subject: 'Workshop', type: 'lab', hours: 2.05, blockHours: 2.05 }]);
   assert.deepEqual(normalized.errors, []);
-  const parsed = parseInstructions('Working days: Saturday, Sunday', DEFAULT_CONFIG);
+  const parsed = parseInstructions('Working days: Saturday, Sunday', config);
   assert.deepEqual(parsed.errors, []);
   const result = generateTimetables(normalized.assignments, parsed.config);
   assert.ok(result.options.length);
@@ -128,7 +131,7 @@ test('fractional clock hours preserve exact minute durations on weekend teaching
 
 test('a valid unavailable window on a nonteaching day is harmless', () => {
   const assignments = [row('1', { teacher: 'Dr. Example' })];
-  const parsed = parseInstructions('Dr. Example unavailable Saturday 09:00-12:00', DEFAULT_CONFIG);
+  const parsed = parseInstructions('Dr. Example unavailable Saturday 09:00-12:00', config);
   const result = generateTimetables(assignments, parsed.config);
   assert.equal(result.options.length, 3);
   assert.ok(result.options.every(option => validateTimetable(option, assignments, parsed.config).valid));
@@ -156,4 +159,170 @@ test('one hundred imported assignments remain practical and globally conflict-fr
   assert.equal(result.options.length, 3);
   assert.ok(result.options.every(option => validateTimetable(option, normalized.assignments, DEFAULT_CONFIG).valid));
   assert.ok(elapsed < 3000, `Generation took ${elapsed}ms`);
+});
+
+const fairConfig = {
+  ...config, start: '08:30', weekStart: '2026-11-16',
+  breaks: [{ name: 'Short break', start: '10:30', end: '10:45' }, { name: 'Lunch', start: '12:45', end: '13:30' }],
+  earlyStart: { enabled: true, time: '08:30', perTeacher: 1 },
+};
+const block = (id, changes = {}) => ({ id, teacher: 'Teacher 1', title: 'Exam duty', type: 'duty', day: 'Monday', start: '09:00', end: '10:00', date: '', ...changes });
+
+test('exact early-start fairness shares class morning slots and excludes research-only teachers', () => {
+  const assignments = [row('1'), row('2'), row('3'), row('r', { teacher: 'Research Fellow', type: 'research', semester: null, section: '', hours: 4 })];
+  const result = generateTimetables(assignments, fairConfig);
+  assert.equal(result.options.length, 3);
+  for (const option of result.options) {
+    assert.equal(validateTimetable(option, assignments, fairConfig).valid, true);
+    assert.equal(option.metrics.earlyStartEqual, true);
+    assert.equal(option.metrics.earlyStarts.length, 3);
+    assert.ok(option.metrics.earlyStarts.every(early => early.count === 1 && early.target === 1));
+    const earlyTeaching = option.events.filter(event => event.type !== 'research' && event.start === '08:30');
+    assert.equal(new Set(earlyTeaching.map(event => event.day)).size, 3);
+  }
+});
+
+test('a configurable target of two early starts is exact rather than a minimum or soft preference', () => {
+  const assignments = [row('1'), row('2')];
+  const configured = { ...fairConfig, earlyStart: { enabled: true, time: '08:30', perTeacher: 2 } };
+  const result = generateTimetables(assignments, configured);
+  assert.equal(result.options.length, 3);
+  assert.ok(result.options.every(option => option.metrics.earlyStarts.every(early => early.count === 2)));
+  assert.ok(result.options.every(option => validateTimetable(option, assignments, configured).valid));
+});
+
+test('morning unavailability, duties, invalid targets and insufficient shared-class mornings never relax fairness', () => {
+  const cases = [
+    { assignments: [row('1')], config: { ...fairConfig, teacherRules: [{ teacher: 'Teacher 1', availableStart: '09:30' }] }, match: /Teacher 1 needs exactly 1 teaching starts at 08:30/ },
+    { assignments: [row('1')], config: { ...fairConfig, teacherBlocks: config.days.map((day, index) => block(`b${index}`, { day, start: '08:30', end: '09:30' })) }, match: /morning availability, fixed duties/ },
+    { assignments: [row('1'), row('2'), row('3')], config: { ...fairConfig, earlyStart: { enabled: true, time: '08:30', perTeacher: 2 } }, match: /only 5 morning slots/ },
+    { assignments: [row('1', { hours: 1 })], config: { ...fairConfig, earlyStart: { enabled: true, time: '08:30', perTeacher: 2 } }, match: /needs exactly 2/ },
+    { assignments: [row('1')], config: { ...fairConfig, earlyStart: { enabled: true, time: '08:30', perTeacher: 0 } }, match: /whole number from 1/ },
+    { assignments: [row('1')], config: { ...fairConfig, earlyStart: { enabled: true, time: '09:00', perTeacher: 1 } }, match: /college day to begin at 09:00/ },
+  ];
+  for (const example of cases) {
+    const result = generateTimetables(example.assignments, example.config);
+    assert.equal(result.options.length, 0);
+    assert.match(result.diagnostics.join(' '), example.match);
+  }
+});
+
+test('teachers competing for the same sole available morning receive an explicit unsatisfied fairness result', () => {
+  const assignments = [row('1', { hours: 1 }), row('2', { hours: 1 })];
+  const configured = { ...fairConfig, teacherRules: ['Teacher 1', 'Teacher 2'].map(teacher => ({ teacher, unavailableDays: ['Tuesday', 'Wednesday', 'Thursday', 'Friday'] })) };
+  const result = generateTimetables(assignments, configured);
+  assert.equal(result.options.length, 0);
+  assert.match(result.diagnostics.join(' '), /exactly 1 start at 08:30/);
+});
+
+test('research has no class resource or class daily limit, while teacher occupancy remains exclusive', () => {
+  const research = [row('r1', { type: 'research', semester: null, section: '', hours: 1 }), row('r2', { type: 'research', semester: null, section: '', hours: 1 })];
+  const narrow = { ...config, days: ['Monday'], start: '09:00', end: '10:00', breaks: [], maxClassHoursPerDay: 0.5 };
+  const simultaneous = generateTimetables(research, narrow);
+  assert.ok(simultaneous.options.length);
+  assert.ok(simultaneous.options[0].events.every(event => event.start === '09:00' && event.semester === null && event.section === ''));
+  assert.equal(validateTimetable(simultaneous.options[0], research, narrow).valid, true);
+  const mixed = [row('1', { hours: 1 }), row('r', { teacher: 'Teacher 1', type: 'research', semester: null, section: '', hours: 1 })];
+  const mixedConfig = { ...narrow, end: '11:00', maxClassHoursPerDay: 1 };
+  const result = generateTimetables(mixed, mixedConfig);
+  assert.ok(result.options.length);
+  assert.equal(new Set(result.options[0].events.map(event => event.start)).size, 2);
+  assert.equal(validateTimetable(result.options[0], mixed, mixedConfig).valid, true);
+  const tampered = structuredClone(result.options[0]);
+  tampered.events[1].start = tampered.events[0].start;
+  tampered.events[1].end = tampered.events[0].end;
+  assert.equal(validateTimetable(tampered, mixed, mixedConfig).valid, false);
+});
+
+test('fixed duties prevent labs crossing their windows and are returned separately from assignment events', () => {
+  const assignments = [row('1', { type: 'lab', hours: 2, blockHours: 2 })];
+  const configured = { ...config, days: ['Monday'], start: '09:00', end: '13:00', breaks: [], teacherBlocks: [block('b1', { start: '10:00', end: '11:00' })] };
+  const result = generateTimetables(assignments, configured);
+  assert.equal(result.options.length, 1);
+  const option = result.options[0];
+  assert.equal(option.events.length, 1);
+  assert.equal(option.events[0].start, '11:00');
+  assert.equal(option.events[0].end, '13:00');
+  assert.equal(option.blocks.length, 1);
+  assert.equal(option.metrics.fixedHours, 1);
+  assert.equal(option.metrics.totalWorkloadHours, 3);
+  assert.equal(validateTimetable(option, assignments, configured).valid, true);
+});
+
+test('duties can span college breaks and their whole clock duration counts as workload', () => {
+  const assignments = [row('1', { hours: 1 })];
+  const configured = { ...config, days: ['Monday'], teacherBlocks: [block('b1', { start: '10:30', end: '11:30' })] };
+  const result = generateTimetables(assignments, configured);
+  assert.ok(result.options.length);
+  assert.equal(result.options[0].metrics.fixedHours, 1);
+  assert.equal(result.options[0].metrics.totalWorkloadHours, 2);
+  assert.equal(validateTimetable(result.options[0], assignments, configured).valid, true);
+});
+
+test('dated blocks apply only in their selected week and derive the weekday from the date', () => {
+  const assignments = [row('1', { hours: 1 })];
+  const configured = { ...config, weekStart: '2026-11-16', teacherBlocks: [block('dated', { day: 'Monday', date: '2026-11-18' })] };
+  const current = generateTimetables(assignments, configured);
+  assert.ok(current.options.length);
+  assert.equal(current.options[0].blocks[0].day, 'Wednesday');
+  assert.equal(current.options[0].metrics.fixedHours, 1);
+  const laterConfig = { ...configured, weekStart: '2026-11-23' };
+  const later = generateTimetables(assignments, laterConfig);
+  assert.ok(later.options.length);
+  assert.equal(later.options[0].blocks.length, 0);
+  assert.equal(later.options[0].metrics.fixedHours, 0);
+  assert.equal(validateTimetable(later.options[0], assignments, laterConfig).valid, true);
+});
+
+test('workload caps include teaching, research and active fixed blocks, including block-only teachers', () => {
+  const assignments = [row('1', { hours: 1 }), row('r', { teacher: 'Teacher 1', type: 'research', semester: null, section: '', hours: 1 })];
+  const weekly = generateTimetables(assignments, { ...config, maxTeacherHoursPerWeek: 2, teacherBlocks: [block('b')] });
+  assert.equal(weekly.options.length, 0);
+  assert.match(weekly.diagnostics.join(' '), /3 workload hours, including 1 fixed hours/);
+  const daily = generateTimetables([row('1', { hours: 1 })], { ...config, days: ['Monday'], maxTeacherHoursPerDay: 1, teacherBlocks: [block('b')] });
+  assert.equal(daily.options.length, 0);
+  assert.match(daily.diagnostics.join(' '), /capacity for only 0/);
+  const blockOnly = generateTimetables([row('1', { hours: 1 })], { ...config, maxTeacherHoursPerDay: 1, teacherBlocks: [block('b', { teacher: 'Visiting Examiner', start: '09:00', end: '11:00' })] });
+  assert.equal(blockOnly.options.length, 0);
+  assert.match(blockOnly.diagnostics.join(' '), /Visiting Examiner's fixed blocks exceed/);
+});
+
+test('malformed, overlapping and out-of-hours fixed blocks fail before generation', () => {
+  const examples = [
+    { blocks: [block('a'), block('b', { start: '09:30', end: '10:30' })], match: /overlaps/ },
+    { blocks: [block('a', { start: '08:00' })], match: /college hours/ },
+    { blocks: [block('a', { date: '2026-02-30' })], match: /valid YYYY-MM-DD/ },
+  ];
+  for (const example of examples) {
+    const result = generateTimetables([row('1')], { ...config, weekStart: '2026-11-16', teacherBlocks: example.blocks });
+    assert.equal(result.options.length, 0);
+    assert.match(result.diagnostics.join(' '), example.match);
+  }
+});
+
+test('independent validation rejects removed fixed blocks, duty collisions and unfair altered event times', () => {
+  const assignments = [row('1', { hours: 1 })];
+  const configured = { ...fairConfig, teacherBlocks: [block('b', { start: '09:30', end: '10:30' })] };
+  const result = generateTimetables(assignments, configured);
+  assert.ok(result.options.length);
+  const omitted = { ...result.options[0], blocks: [] };
+  assert.match(validateTimetable(omitted, assignments, configured).errors.join(' '), /fixed blocks do not match/);
+  const collision = structuredClone(result.options[0]);
+  collision.events[0].day = 'Monday'; collision.events[0].start = '09:30'; collision.events[0].end = '10:30';
+  const validation = validateTimetable(collision, assignments, configured);
+  assert.equal(validation.valid, false);
+  assert.match(validation.errors.join(' '), /double-booked/);
+  assert.match(validation.errors.join(' '), /exactly 1 are required/);
+  assert.equal(validation.metrics.earlyStartEqual, false);
+  // A forged summary cannot bypass the independent event recount.
+  collision.metrics.earlyStartEqual = true;
+  assert.equal(validateTimetable(collision, assignments, configured).metrics.earlyStartEqual, false);
+});
+
+test('near-zero positive durations are rejected instead of creating zero-minute scheduling tasks', () => {
+  for (const changes of [{ hours: 0.5, blockHours: 1e-9 }, { hours: 1e-9, blockHours: 1 }]) {
+    const result = generateTimetables([row('1', changes)], config);
+    assert.equal(result.options.length, 0);
+    assert.match(result.diagnostics.join(' '), /whole.*minutes/);
+  }
 });

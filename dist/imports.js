@@ -3,7 +3,7 @@ const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'
 const DAY_ALIASES = Object.fromEntries(DAYS.flatMap(day => [[day.toLowerCase(), day], [day.slice(0, 3).toLowerCase(), day], [`${day.toLowerCase()}s`, day]]));
 Object.assign(DAY_ALIASES, { tues: 'Tuesday', thurs: 'Thursday', thur: 'Thursday' });
 
-export const TEMPLATE_CSV = 'department,semester,section,teacher,subject,code,type,weekly_hours,room,block_hours\r\nComputer Science,3,A,Dr. Ananya Rao,Data Structures,CS301,lecture,3,C301,1\r\nComputer Science,3,A,Dr. Ananya Rao,Data Structures Lab,CS351,lab,2,CS Lab 1,2\r\nElectronics,3,A,Dr. Vikram Shah,Digital Electronics,EC301,lecture,3,E301,1\r\n';
+export const TEMPLATE_CSV = 'department,semester,section,teacher,subject,code,type,weekly_hours,room,block_hours\r\nComputer Science,3,A,Dr. Ananya Rao,Data Structures,CS301,lecture,3,C301,1\r\nComputer Science,3,A,Dr. Ananya Rao,Data Structures Lab,CS351,lab,2,CS Lab 1,2\r\nElectronics,3,A,Dr. Vikram Shah,Digital Electronics,EC301,lecture,3,E301,1\r\nComputer Science,,,Dr. Ananya Rao,Research and publication,,research,2,,1\r\n';
 
 /** RFC 4180-style CSV, including quoted commas, newlines, and escaped quotes. */
 export function parseCSV(text) {
@@ -89,22 +89,22 @@ export function normalizeAssignments(rows) {
       if (!record[key]) rowErrors.push(`${key} is required`);
       else if (record[key].length > 160) rowErrors.push(`${key} must be 160 characters or fewer`);
     }
+    const type = identity(record.type);
+    record.type = ['research', 'research work'].includes(type) ? 'research' : ['lab', 'laboratory', 'practical'].includes(type) ? 'lab' : ['lecture', 'class', 'theory', 'tutorial'].includes(type) ? 'lecture' : !type ? /\blab(?:oratory)?\b|\bpractical\b/i.test(record.subject) ? 'lab' : 'lecture' : '';
+    if (!record.type) rowErrors.push('type must be lecture, lab or research');
     const semesterText = clean(record.semester).replace(/^(?:semester|sem)\s*/i, '');
-    record.semester = Number(semesterText);
-    if (!semesterText || !Number.isInteger(record.semester) || record.semester < 1 || record.semester > 8) rowErrors.push('semester must be a number from 1 to 8');
-    record.section = clean(record.section) || 'A';
+    record.semester = record.type === 'research' ? null : Number(semesterText);
+    if (record.type !== 'research' && (!semesterText || !Number.isInteger(record.semester) || record.semester < 1 || record.semester > 8)) rowErrors.push('semester must be a number from 1 to 8 for lectures and labs');
+    record.section = record.type === 'research' ? '' : clean(record.section) || 'A';
     record.code = clean(record.code);
     record.room = clean(record.room);
-    if (!record.room) roomsMissing = true;
-    const type = identity(record.type);
-    record.type = ['lab', 'laboratory', 'practical'].includes(type) ? 'lab' : ['lecture', 'class', 'theory', 'tutorial'].includes(type) ? 'lecture' : !type ? /\blab(?:oratory)?\b|\bpractical\b/i.test(record.subject) ? 'lab' : 'lecture' : '';
-    if (!record.type) rowErrors.push('type must be lecture or lab');
+    if (!record.room && record.type !== 'research') roomsMissing = true;
     record.hours = numeric(record.hours);
     if (!Number.isFinite(record.hours) || record.hours <= 0 || record.hours > 60) rowErrors.push('weekly_hours must be a positive number no greater than 60');
-    else if (Math.abs(record.hours * 60 - Math.round(record.hours * 60)) > 0.000001) rowErrors.push('weekly_hours must resolve to a whole number of minutes');
+    else if (Math.round(record.hours * 60) < 1 || Math.abs(record.hours * 60 - Math.round(record.hours * 60)) > 0.000001) rowErrors.push('weekly_hours must resolve to at least one whole minute');
     record.blockHours = clean(record.blockHours) ? numeric(record.blockHours) : record.type === 'lab' ? Math.min(2, record.hours) : 1;
     if (!Number.isFinite(record.blockHours) || record.blockHours <= 0 || record.blockHours > 8) rowErrors.push('block_hours must be a positive number no greater than 8');
-    else if (Math.abs(record.blockHours * 60 - Math.round(record.blockHours * 60)) > 0.000001) rowErrors.push('block_hours must resolve to a whole number of minutes');
+    else if (Math.round(record.blockHours * 60) < 1 || Math.abs(record.blockHours * 60 - Math.round(record.blockHours * 60)) > 0.000001) rowErrors.push('block_hours must resolve to at least one whole minute');
     else if (Number.isFinite(record.hours) && Math.abs(record.hours / record.blockHours - Math.round(record.hours / record.blockHours)) > 0.00001) rowErrors.push('weekly_hours must be a multiple of block_hours');
     const key = [record.department, record.semester, record.section, record.teacher, record.subject, record.code, record.type].map(identity).join('\u001f');
     if (seen.has(key)) rowErrors.push('this teaching assignment appears more than once; combine its weekly hours into one row');

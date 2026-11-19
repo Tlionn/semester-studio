@@ -2,23 +2,25 @@ export const DEMO_FILENAME = 'faculty_assignments_2026.csv';
 
 export const DEFAULT_CONFIG = {
   days: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'],
-  start: '09:00',
+  start: '08:30',
   end: '16:30',
   slotMinutes: 60,
   breaks: [
-    { name: 'Short break', start: '11:00', end: '11:15' },
-    { name: 'Lunch', start: '13:15', end: '14:00' },
+    { name: 'Short break', start: '10:30', end: '10:45' },
+    { name: 'Lunch', start: '12:45', end: '13:30' },
   ],
   maxTeacherHoursPerDay: 5,
   maxTeacherHoursPerWeek: 24,
   maxClassHoursPerDay: 6,
   teacherRules: [],
+  teacherBlocks: [],
+  earlyStart: { enabled: true, time: '08:30', perTeacher: 1 },
 };
 
-export const DEFAULT_INSTRUCTIONS = `College hours: 09:00-16:30
+export const DEFAULT_INSTRUCTIONS = `College hours: 08:30-16:30
 Working days: Monday-Friday
-Short break: 11:00-11:15
-Lunch: 13:15-14:00
+Short break: 10:30-10:45
+Lunch: 12:45-13:30
 Maximum teacher hours per day: 5
 Maximum teacher hours per week: 24
 Maximum class hours per day: 6
@@ -57,10 +59,17 @@ const rows = [
   ['Mechanical', 3, 'Dr. Dev Malhotra', 'Fluid Mechanics', 'ME303', 'lecture', 3, 'M301'],
   ['Mechanical', 3, 'Prof. Ishaan Bose', 'Manufacturing Processes', 'ME304', 'lecture', 3, 'M301'],
   ['Mechanical', 3, 'Prof. Ishaan Bose', 'Manufacturing Lab', 'ME351', 'lab', 2, 'Manufacturing Lab'],
+  ['Computer Science', null, 'Dr. Ananya Rao', 'Research and publication', 'RES01', 'research', 2, ''],
+  ['Electronics', null, 'Prof. Meera Nair', 'Research and development', 'RES02', 'research', 2, ''],
 ];
 
 export const DEMO_ASSIGNMENTS = rows.map((row, index) => ({
-  id: `demo-${index + 1}`, department: row[0], semester: row[1], section: 'A',
+  id: `demo-${index + 1}`, department: row[0], semester: row[1], section: row[5] === 'research' ? '' : 'A',
   teacher: row[2], subject: row[3], code: row[4], type: row[5], hours: row[6], room: row[7],
   blockHours: row[5] === 'lab' ? 2 : 1,
 }));
+
+export const DEMO_BLOCKS = [
+  { id: 'demo-duty-1', teacher: 'Dr. Ananya Rao', title: 'Test invigilation', type: 'duty', day: 'Thursday', start: '13:30', end: '14:30', date: '' },
+  { id: 'demo-duty-2', teacher: 'Dr. Rahul Menon', title: 'Department meeting', type: 'other', day: 'Tuesday', start: '14:30', end: '15:30', date: '' },
+];

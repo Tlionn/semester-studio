@@ -17,7 +17,7 @@ test('Malformed CSV fails without silent row truncation', () => {
 test('Template normalizes and accepts flexible spreadsheet headers', () => {
   const result = normalizeAssignments(parseCSV(TEMPLATE_CSV));
   assert.deepEqual(result.errors, []);
-  assert.equal(result.assignments.length, 3);
+  assert.equal(result.assignments.length, 4);
   assert.equal(result.assignments[1].type, 'lab');
   const aliases = normalizeAssignments([{ Dept: 'CSE', Sem: 'Semester 3', Faculty: 'Rao', 'Course Name': 'Algorithms', 'Hours Per Week': 4 }]);
   assert.deepEqual(aliases.errors, []);
@@ -91,6 +91,31 @@ test('Alternative global wording and before/after availability retain exact limi
 
 test('Demo includes shared teachers, three departments, and four semester choices', () => {
   assert.equal(new Set(DEMO_ASSIGNMENTS.map(row => row.department)).size, 3);
-  assert.equal(new Set(DEMO_ASSIGNMENTS.map(row => row.semester)).size, 4);
+  assert.equal(new Set(DEMO_ASSIGNMENTS.filter(row => row.type !== 'research').map(row => row.semester)).size, 4);
+  assert.equal(DEMO_ASSIGNMENTS.filter(row => row.type === 'research').length, 2);
   assert.ok(DEMO_ASSIGNMENTS.every(row => row.hours % row.blockHours === 0));
+});
+
+test('Research workload belongs to a teacher without creating a semester or section', () => {
+  const result = normalizeAssignments([{ department: 'CSE', teacher: 'Dr. Rao', 'Course Name': 'Research', type: 'research', weekly_hours: 3 }]);
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.warnings, []);
+  assert.equal(result.assignments[0].semester, null);
+  assert.equal(result.assignments[0].section, '');
+  assert.equal(result.assignments[0].blockHours, 1);
+  assert.equal(result.assignments[0].type, 'research');
+  const invalid = normalizeAssignments([{ department: 'CSE', teacher: 'Dr. Rao', type: 'research', weekly_hours: 2 }]);
+  assert.ok(invalid.errors.some(error => error.includes('subject is required')));
+});
+
+test('Positive durations too small to represent one minute cannot become zero-length sessions', () => {
+  const base = { department: 'CSE', teacher: 'Dr. Rao', subject: 'Research', type: 'research', weekly_hours: 1, block_hours: 1 };
+  const tinyWorkload = normalizeAssignments([{ ...base, weekly_hours: 1e-9, block_hours: 1e-9 }]);
+  assert.equal(tinyWorkload.assignments.length, 0);
+  assert.ok(tinyWorkload.errors.some(error => error.includes('weekly_hours must resolve to at least one whole minute')));
+  assert.ok(tinyWorkload.errors.some(error => error.includes('block_hours must resolve to at least one whole minute')));
+  const tinyBlock = normalizeAssignments([{ ...base, block_hours: 1e-9 }]);
+  assert.equal(tinyBlock.assignments.length, 0);
+  const oneMinute = normalizeAssignments([{ ...base, weekly_hours: 1 / 60, block_hours: 1 / 60 }]);
+  assert.deepEqual(oneMinute.errors, []);
 });
