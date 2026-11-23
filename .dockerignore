@@ -1,0 +1,30 @@
+# Only application source and the files needed for the image build enter context.
+# This excludes Git history, Sites metadata, credentials, exports, and local deps.
+**
+!Dockerfile
+!package.json
+!package-lock.json
+!scripts/
+!scripts/build.mjs
+!docker/
+!docker/nginx.conf
+!dist/
+!dist/*.html
+!dist/*.js
+!dist/*.css
+!dist/*.svg
+!dist/*.ico
+!dist/*.png
+!dist/*.webp
+!dist/*.woff2
+!dist/assets/
+!dist/assets/**
+
+# Rebuild the vendor bundle from package-lock.json; never use local node_modules.
+dist/vendor/
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx

@@ -1,3 +1,6 @@
 node_modules/
 *.tar.gz
 .sites-local/
+.env
+.env.*
+!.env.example

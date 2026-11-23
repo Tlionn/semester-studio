@@ -2,6 +2,28 @@
 
 A browser-local engineering college timetable builder. The frontend includes real constraint scheduling rather than a static calendar mockup.
 
+## Run with Docker
+
+Requires Docker Engine or Docker Desktop with Linux containers and Docker Compose v2.
+
+```sh
+git clone https://github.com/Tlionn/semester-studio.git
+cd semester-studio
+docker compose up --build -d
+```
+
+Open http://localhost:8080. The first build downloads the base images and the locked SheetJS dependency; subsequent starts use the built image. The runtime serves only static assets with NGINX as a non-root user. It does not require Node.js on your host, a database, or API keys.
+
+```sh
+docker compose ps
+docker compose logs -f app
+docker compose down
+```
+
+By default, Docker publishes port 8080 only on this computer (`127.0.0.1`). To choose another port, copy `.env.example` to `.env`, change `HOST_PORT`, and rerun `docker compose up -d`. `HOST_BIND=0.0.0.0` allows network access; use it only when intended. These settings can also be passed as environment variables.
+
+The container has a `/healthz` health check. Timetables remain in each browser's local storage, so no Docker data volume is required. A different hostname or port has separate browser storage; export plans before switching addresses. The Docker instance has no built-in login; ChatGPT sign-in applies only to the separately hosted Site.
+
 ## Run locally
 
 Requires Node.js 20 or newer.
